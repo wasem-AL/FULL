@@ -267,13 +267,23 @@
     return '';
   };
 
+  // تحديث دالة الوقت لتتعامل مع التوقيت المرسل من ESP32 (Unix Timestamp)
   function fmtDate(v) {
-    if (!v) return '—';
+    if (v === undefined || v === null || v === '') return '—';
     let d;
-    if (typeof v.toDate === 'function') d = v.toDate();
-    else if (typeof v === 'number') d = new Date(v);
-    else { d = new Date(v); if (isNaN(d)) return String(v); }
-    if (isNaN(d)) return '—';
+    if (typeof v.toDate === 'function') {
+      d = v.toDate();
+    } else if (typeof v === 'object' && typeof v.seconds === 'number') {
+      d = new Date(v.seconds * 1000);
+    } else if (typeof v === 'number' || (!isNaN(v) && String(v).length >= 10 && String(v).length <= 13)) {
+      let num = Number(v);
+      if (String(num).length === 10) num *= 1000; // تحويل الثواني إلى ملي ثانية
+      d = new Date(num);
+    } else {
+      d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+    }
+    if (isNaN(d.getTime())) return '—';
     return d.toLocaleDateString('ar-LY-u-nu-latn', { year: 'numeric', month: 'long', day: 'numeric' });
   }
 
@@ -323,42 +333,76 @@
     timer.classList.remove('run');
   }
 
-  function fillDetails(d) {
+  // تحويل الدالة إلى async لجلب البيانات من المسارات الصحيحة
+  async function fillDetails(d) {
     const name  = pick(d, ['owner_name', 'name', 'full_name', 'driver_name', 'customer_name']);
     const phone = pick(d, ['phone', 'phone_number', 'owner_phone', 'mobile']);
     const plate = pick(d, ['car_plate', 'plate', 'plate_number']);
-    const fuel  = pick(d, ['fuel_type', 'car_fuel_type', 'fuel']);
-    const usage = pick(d, ['usage_type', 'usage', 'car_usage', 'use_type']);
-    const last  = pick(d, ['last_fill_date', 'last_fueling_date', 'last_fill', 'last_fuel_date', 'last_refuel']);
 
     setText('v-name', name);
     setText('v-phone', phone);
-    setText('v-usage', usage);
-    const lastTxt = fmtDate(last);
-    setText('v-last', lastTxt === '—' ? '' : lastTxt);
-
+    
     const p = $('v-plate');
     p.className = plate ? 'plate' : 'empty';
     p.innerText = plate || '—';
 
-    const k = fuelKind(fuel);
+    // تصفير الحقول الإضافية مؤقتاً حتى يتم جلبها
+    setText('v-usage', '');
     const f = $('v-fuel');
-    f.className = 'tag ' + (fuel ? k : 'other empty');
-    f.innerText = fuelLabel[k] || fuel || '—';
-    return k;
+    f.className = 'tag other empty'; f.innerText = '—';
+    setText('v-last', '');
+
+    let fuelKindStr = 'other';
+
+    if (plate && plate !== 'غير مستخدم ⚠️') {
+      try {
+        // 1. جلب نوع الوقود والاستعمال من جميع الكولكشن الفرعية cars بالبحث عن اللوحة
+        const carSnap = await db.collectionGroup('cars').where('plate', '==', plate).get();
+        if (!carSnap.empty) {
+          const car = carSnap.docs[0].data();
+          const fuel = car.fuel || '';
+          const usage = car.usage || '';
+
+          setText('v-usage', usage);
+
+          fuelKindStr = fuelKind(fuel);
+          f.className = 'tag ' + (fuel ? fuelKindStr : 'other empty');
+          f.innerText = fuelLabel[fuelKindStr] || fuel || '—';
+        }
+      } catch (err) {
+        console.error("خطأ في جلب بيانات السيارة:", err);
+      }
+
+      try {
+        // 2. جلب تاريخ آخر تعبئة من كولكشن scans باستخدام رقم اللوحة
+        const scanDoc = await db.collection('scans').doc(plate).get();
+        if (scanDoc.exists) {
+          const lastData = scanDoc.data();
+          const lastTxt = fmtDate(lastData.timestamp);
+          setText('v-last', lastTxt === '—' ? '' : lastTxt);
+        }
+      } catch (err) {
+        console.error("خطأ في جلب تاريخ التعبئة:", err);
+      }
+    }
+
+    return fuelKindStr;
   }
 
   /* =====================================================
      الاستماع الحي لحالة التعبئة الحالية
   ===================================================== */
-  db.collection('live_status').doc('current_scan').onSnapshot((snap) => {
+  db.collection('live_status').doc('current_scan').onSnapshot(async (snap) => {
     if (resetTimeout) clearTimeout(resetTimeout);
     if (!snap.exists) { showIdle(); return; }
 
     const d = snap.data();
     const status = (d.verification_status || '').trim().toLowerCase();
     const plate  = d.car_plate || '';
-    const carFuel = fillDetails(d);
+    
+    // ننتظر حتى تجلب الدالة البيانات من المسارات المطلوبة
+    const carFuel = await fillDetails(d);
+    
     const nextDate = fmtDate(pick(d, ['next_fill_date', 'next_allowed_date', 'next_fueling_date', 'next_date']));
     const hasNext  = nextDate !== '—';
 
