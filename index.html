@@ -16,7 +16,7 @@
     --ink:      #0a1f44;
     --muted:    #5b6b86;
     --line:     #dde4ef;
-    --accent:   #94a3b8;           /* لون الحالة الحالية (يتغير من JS) */
+    --accent:   #94a3b8;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { min-height: 100%; }
@@ -27,7 +27,6 @@
   }
   svg { display: block; }
 
-  /* ================= الترويسة ================= */
   .topbar {
     background: var(--navy-950);
     color: #fff;
@@ -49,12 +48,7 @@
     font-variant-numeric: tabular-nums; font-weight: 700; font-size: 20px;
     direction: ltr; color: #fff; opacity: .9;
   }
-  .live { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px;
-          background: rgba(255,255,255,.08); font-size: 13px; font-weight: 600; }
-  .live i { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: blink 1.4s infinite; }
-  @keyframes blink { 50% { opacity: .25; } }
 
-  /* ================= لوحة الحالة ================= */
   .hero {
     position: relative; overflow: hidden;
     background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 100%);
@@ -104,7 +98,6 @@
   .timer.run > div { width: 100%; animation: shrink 10s linear forwards; }
   @keyframes shrink { from { width: 100%; } to { width: 0; } }
 
-  /* ================= البيانات ================= */
   main { flex: 1; width: 100%; max-width: 1200px; margin: 0 auto; padding: 34px 5vw 50px; }
   .section-title {
     display: flex; align-items: center; gap: 12px;
@@ -137,7 +130,6 @@
   .tag.petrol { background: #fff; color: var(--navy-900); border: 2px solid var(--navy-900); }
   .tag.other  { padding: 0; }
 
-  /* ================= الملاحظات ================= */
   .notes {
     margin-top: 34px;
     background: var(--navy-50);
@@ -158,7 +150,6 @@
   .next b { font-size: 21px; }
 
   .hidden { display: none !important; }
-
   footer { background: var(--navy-950); color: rgba(255,255,255,.55); text-align: center; font-size: 12px; padding: 14px; }
 
   @media (max-width: 860px) {
@@ -173,7 +164,6 @@
 </head>
 <body>
 
-  <!-- لوحة الحالة -->
   <section id="hero" class="hero">
     <div id="clock" class="clock">--:--:--</div>
     <div class="hero-inner">
@@ -267,7 +257,6 @@
     return '';
   };
 
-  // تحديث دالة الوقت لتتعامل مع التوقيت المرسل من ESP32 (Unix Timestamp)
   function fmtDate(v) {
     if (v === undefined || v === null || v === '') return '—';
     let d;
@@ -277,7 +266,7 @@
       d = new Date(v.seconds * 1000);
     } else if (typeof v === 'number' || (!isNaN(v) && String(v).length >= 10 && String(v).length <= 13)) {
       let num = Number(v);
-      if (String(num).length === 10) num *= 1000; // تحويل الثواني إلى ملي ثانية
+      if (String(num).length === 10) num *= 1000;
       d = new Date(num);
     } else {
       d = new Date(v);
@@ -333,11 +322,10 @@
     timer.classList.remove('run');
   }
 
-  // تحويل الدالة إلى async لجلب البيانات من المسارات الصحيحة
   async function fillDetails(d) {
-    const name  = pick(d, ['owner_name', 'name', 'full_name', 'driver_name', 'customer_name']);
-    const phone = pick(d, ['phone', 'phone_number', 'owner_phone', 'mobile']);
-    const plate = pick(d, ['car_plate', 'plate', 'plate_number']);
+    let name  = pick(d, ['owner_name', 'name', 'full_name', 'driver_name', 'customer_name']);
+    let phone = pick(d, ['phone', 'phone_number', 'owner_phone', 'mobile']);
+    let plate = pick(d, ['car_plate', 'plate', 'plate_number']);
 
     setText('v-name', name);
     setText('v-phone', phone);
@@ -346,7 +334,6 @@
     p.className = plate ? 'plate' : 'empty';
     p.innerText = plate || '—';
 
-    // تصفير الحقول الإضافية مؤقتاً حتى يتم جلبها
     setText('v-usage', '');
     const f = $('v-fuel');
     f.className = 'tag other empty'; f.innerText = '—';
@@ -355,27 +342,53 @@
     let fuelKindStr = 'other';
 
     if (plate && plate !== 'غير مستخدم ⚠️') {
+      const cleanPlate = plate.trim();
       try {
-        // 1. جلب نوع الوقود والاستعمال من جميع الكولكشن الفرعية cars بالبحث عن اللوحة
-        const carSnap = await db.collectionGroup('cars').where('plate', '==', plate).get();
+        // 1. جلب بيانات السيارة (الوقود والاستعمال) والمستخدم (الاسم والهاتف) من الكولكشن الفرعي
+        const carSnap = await db.collectionGroup('cars').where('plate', '==', cleanPlate).get();
         if (!carSnap.empty) {
-          const car = carSnap.docs[0].data();
+          const carDoc = carSnap.docs[0];
+          const car = carDoc.data();
           const fuel = car.fuel || '';
           const usage = car.usage || '';
 
-          setText('v-usage', usage);
+          if (usage) setText('v-usage', usage);
 
-          fuelKindStr = fuelKind(fuel);
-          f.className = 'tag ' + (fuel ? fuelKindStr : 'other empty');
-          f.innerText = fuelLabel[fuelKindStr] || fuel || '—';
+          if (fuel) {
+            fuelKindStr = fuelKind(fuel);
+            f.className = 'tag ' + fuelKindStr;
+            f.innerText = fuelLabel[fuelKindStr] || fuel;
+          }
+
+          // إذا لم يرسل ESP32 الاسم أو الهاتف (كما يحدث في حالات الرفض)، نجلبه من وثيقة المستخدم الأب
+          if (!name || !phone) {
+            const userDocRef = carDoc.ref.parent.parent;
+            if (userDocRef) {
+              const userDoc = await userDocRef.get();
+              if (userDoc.exists) {
+                const userData = userDoc.data();
+                if (!name && userData.name) setText('v-name', userData.name);
+                if (!phone && userData.phone) setText('v-phone', userData.phone);
+              }
+            }
+          }
         }
       } catch (err) {
-        console.error("خطأ في جلب بيانات السيارة:", err);
+        console.error("تنبيه: فشل البحث في مجموعة السيارات (تأكد من إضافة Index). تفاصيل:", err.message);
+        // محاولة جلب احتياطية إذا كانت البيانات موجودة في مسح ESP32
+        const backupFuel = pick(d, ['fuel', 'fuel_type', 'car_fuel_type']);
+        const backupUsage = pick(d, ['usage', 'usage_type', 'car_usage']);
+        if (backupUsage) setText('v-usage', backupUsage);
+        if (backupFuel) {
+          fuelKindStr = fuelKind(backupFuel);
+          f.className = 'tag ' + fuelKindStr;
+          f.innerText = fuelLabel[fuelKindStr] || backupFuel;
+        }
       }
 
       try {
-        // 2. جلب تاريخ آخر تعبئة من كولكشن scans باستخدام رقم اللوحة
-        const scanDoc = await db.collection('scans').doc(plate).get();
+        // 2. جلب تاريخ آخر تعبئة
+        const scanDoc = await db.collection('scans').doc(cleanPlate).get();
         if (scanDoc.exists) {
           const lastData = scanDoc.data();
           const lastTxt = fmtDate(lastData.timestamp);
@@ -389,9 +402,6 @@
     return fuelKindStr;
   }
 
-  /* =====================================================
-     الاستماع الحي لحالة التعبئة الحالية
-  ===================================================== */
   db.collection('live_status').doc('current_scan').onSnapshot(async (snap) => {
     if (resetTimeout) clearTimeout(resetTimeout);
     if (!snap.exists) { showIdle(); return; }
@@ -400,7 +410,6 @@
     const status = (d.verification_status || '').trim().toLowerCase();
     const plate  = d.car_plate || '';
     
-    // ننتظر حتى تجلب الدالة البيانات من المسارات المطلوبة
     const carFuel = await fillDetails(d);
     
     const nextDate = fmtDate(pick(d, ['next_fill_date', 'next_allowed_date', 'next_fueling_date', 'next_date']));
@@ -431,8 +440,10 @@
                    : 'لا يمكنك التعبئة: هذه السيارة غير نشطة بالمنظومة.');
     }
 
+    // تشغيل شريط الوقت (10 ثواني)
     timer.classList.remove('run'); void timer.offsetWidth; timer.classList.add('run');
 
+    // تصفير الشاشة بعد 10 ثواني إذا لم يتم مسح جديد
     resetTimeout = setTimeout(() => {
       db.collection('live_status').doc('current_scan').delete()
         .catch((err) => console.error('خطأ التصفير:', err));
