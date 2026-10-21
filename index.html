@@ -16,7 +16,7 @@
     --ink:      #0a1f44;
     --muted:    #5b6b86;
     --line:     #dde4ef;
-    --accent:   #94a3b8;
+    --accent:   #94a3b8;           /* لون الحالة الحالية (يتغير من JS) */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { min-height: 100%; }
@@ -27,6 +27,7 @@
   }
   svg { display: block; }
 
+  /* ================= الترويسة ================= */
   .topbar {
     background: var(--navy-950);
     color: #fff;
@@ -48,7 +49,12 @@
     font-variant-numeric: tabular-nums; font-weight: 700; font-size: 20px;
     direction: ltr; color: #fff; opacity: .9;
   }
+  .live { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px;
+          background: rgba(255,255,255,.08); font-size: 13px; font-weight: 600; }
+  .live i { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: blink 1.4s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
 
+  /* ================= لوحة الحالة ================= */
   .hero {
     position: relative; overflow: hidden;
     background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 100%);
@@ -98,6 +104,7 @@
   .timer.run > div { width: 100%; animation: shrink 10s linear forwards; }
   @keyframes shrink { from { width: 100%; } to { width: 0; } }
 
+  /* ================= البيانات ================= */
   main { flex: 1; width: 100%; max-width: 1200px; margin: 0 auto; padding: 34px 5vw 50px; }
   .section-title {
     display: flex; align-items: center; gap: 12px;
@@ -130,6 +137,7 @@
   .tag.petrol { background: #fff; color: var(--navy-900); border: 2px solid var(--navy-900); }
   .tag.other  { padding: 0; }
 
+  /* ================= الملاحظات ================= */
   .notes {
     margin-top: 34px;
     background: var(--navy-50);
@@ -150,6 +158,7 @@
   .next b { font-size: 21px; }
 
   .hidden { display: none !important; }
+
   footer { background: var(--navy-950); color: rgba(255,255,255,.55); text-align: center; font-size: 12px; padding: 14px; }
 
   @media (max-width: 860px) {
@@ -164,6 +173,7 @@
 </head>
 <body>
 
+  <!-- لوحة الحالة -->
   <section id="hero" class="hero">
     <div id="clock" class="clock">--:--:--</div>
     <div class="hero-inner">
@@ -258,21 +268,12 @@
   };
 
   function fmtDate(v) {
-    if (v === undefined || v === null || v === '') return '—';
+    if (!v) return '—';
     let d;
-    if (typeof v.toDate === 'function') {
-      d = v.toDate();
-    } else if (typeof v === 'object' && typeof v.seconds === 'number') {
-      d = new Date(v.seconds * 1000);
-    } else if (typeof v === 'number' || (!isNaN(v) && String(v).length >= 10 && String(v).length <= 13)) {
-      let num = Number(v);
-      if (String(num).length === 10) num *= 1000;
-      d = new Date(num);
-    } else {
-      d = new Date(v);
-      if (isNaN(d.getTime())) return String(v);
-    }
-    if (isNaN(d.getTime())) return '—';
+    if (typeof v.toDate === 'function') d = v.toDate();
+    else if (typeof v === 'number') d = new Date(v);
+    else { d = new Date(v); if (isNaN(d)) return String(v); }
+    if (isNaN(d)) return '—';
     return d.toLocaleDateString('ar-LY-u-nu-latn', { year: 'numeric', month: 'long', day: 'numeric' });
   }
 
@@ -322,97 +323,99 @@
     timer.classList.remove('run');
   }
 
-  async function fillDetails(d) {
-    let name  = pick(d, ['owner_name', 'name', 'full_name', 'driver_name', 'customer_name']);
-    let phone = pick(d, ['phone', 'phone_number', 'owner_phone', 'mobile']);
-    let plate = pick(d, ['car_plate', 'plate', 'plate_number']);
+  function fillDetails(d) {
+    const name  = pick(d, ['owner_name', 'ownerName', 'name', 'full_name', 'driver_name', 'customer_name']);
+    const phone = pick(d, ['phone', 'phone_number', 'owner_phone', 'ownerPhone', 'mobile']);
+    const plate = pick(d, ['car_plate', 'plate', 'plate_number', 'carNumber']);
+    const fuel  = pick(d, ['fuel_type', 'fuelType', 'car_fuel_type', 'carFuelType', 'fuel']);
+    const usage = pick(d, ['usage_type', 'usageType', 'usage', 'car_usage', 'carUsage', 'use_type']);
+    const last  = pick(d, ['last_fill_date', 'lastFillDate', 'last_fueling_date', 'lastFuelingDate', 'last_fill', 'last_fuel_date', 'lastFuelDate', 'last_refuel', 'lastRefuel']);
 
     setText('v-name', name);
     setText('v-phone', phone);
-    
+    setText('v-usage', usage);
+    const lastTxt = fmtDate(last);
+    setText('v-last', lastTxt === '—' ? '' : lastTxt);
+
     const p = $('v-plate');
     p.className = plate ? 'plate' : 'empty';
     p.innerText = plate || '—';
 
-    setText('v-usage', '');
+    const k = fuelKind(fuel);
     const f = $('v-fuel');
-    f.className = 'tag other empty'; f.innerText = '—';
-    setText('v-last', '');
-
-    let fuelKindStr = 'other';
-
-    if (plate && plate !== 'غير مستخدم ⚠️') {
-      const cleanPlate = plate.trim();
-      try {
-        // 1. جلب بيانات السيارة (الوقود والاستعمال) والمستخدم (الاسم والهاتف) من الكولكشن الفرعي
-        const carSnap = await db.collectionGroup('cars').where('plate', '==', cleanPlate).get();
-        if (!carSnap.empty) {
-          const carDoc = carSnap.docs[0];
-          const car = carDoc.data();
-          const fuel = car.fuel || '';
-          const usage = car.usage || '';
-
-          if (usage) setText('v-usage', usage);
-
-          if (fuel) {
-            fuelKindStr = fuelKind(fuel);
-            f.className = 'tag ' + fuelKindStr;
-            f.innerText = fuelLabel[fuelKindStr] || fuel;
-          }
-
-          // إذا لم يرسل ESP32 الاسم أو الهاتف (كما يحدث في حالات الرفض)، نجلبه من وثيقة المستخدم الأب
-          if (!name || !phone) {
-            const userDocRef = carDoc.ref.parent.parent;
-            if (userDocRef) {
-              const userDoc = await userDocRef.get();
-              if (userDoc.exists) {
-                const userData = userDoc.data();
-                if (!name && userData.name) setText('v-name', userData.name);
-                if (!phone && userData.phone) setText('v-phone', userData.phone);
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.error("تنبيه: فشل البحث في مجموعة السيارات (تأكد من إضافة Index). تفاصيل:", err.message);
-        // محاولة جلب احتياطية إذا كانت البيانات موجودة في مسح ESP32
-        const backupFuel = pick(d, ['fuel', 'fuel_type', 'car_fuel_type']);
-        const backupUsage = pick(d, ['usage', 'usage_type', 'car_usage']);
-        if (backupUsage) setText('v-usage', backupUsage);
-        if (backupFuel) {
-          fuelKindStr = fuelKind(backupFuel);
-          f.className = 'tag ' + fuelKindStr;
-          f.innerText = fuelLabel[fuelKindStr] || backupFuel;
-        }
-      }
-
-      try {
-        // 2. جلب تاريخ آخر تعبئة
-        const scanDoc = await db.collection('scans').doc(cleanPlate).get();
-        if (scanDoc.exists) {
-          const lastData = scanDoc.data();
-          const lastTxt = fmtDate(lastData.timestamp);
-          setText('v-last', lastTxt === '—' ? '' : lastTxt);
-        }
-      } catch (err) {
-        console.error("خطأ في جلب تاريخ التعبئة:", err);
-      }
-    }
-
-    return fuelKindStr;
+    f.className = 'tag ' + (fuel ? k : 'other empty');
+    f.innerText = fuelLabel[k] || fuel || '—';
+    return k;
   }
 
-  db.collection('live_status').doc('current_scan').onSnapshot(async (snap) => {
-    if (resetTimeout) clearTimeout(resetTimeout);
-    if (!snap.exists) { showIdle(); return; }
+  /* =====================================================
+     جلب بيانات السيارة والمالك من قاعدة البيانات
+     (لأن مستند live_status قد لا يحتوي نوع الوقود والاستعمال)
+  ===================================================== */
+  const norm = (v) => String(v || '').replace(/[\s\-_]/g, '').toLowerCase();
+  const carCache = {};
 
-    const d = snap.data();
+  async function lookupCar(plate) {
+    const key = norm(plate);
+    if (!key) return null;
+    if (carCache[key] && Date.now() - carCache[key].t < 60000) return carCache[key].v;
+
+    let found = null;
+
+    /* المحاولة 1: بحث مباشر بكل السيارات */
+    try {
+      const q = await db.collectionGroup('cars').where('plate', '==', plate).limit(1).get();
+      if (!q.empty) {
+        const carDoc = q.docs[0];
+        const userDoc = await carDoc.ref.parent.parent.get();
+        found = { car: carDoc.data(), user: userDoc.exists ? userDoc.data() : {} };
+      }
+    } catch (e) { /* قد يحتاج فهرسًا - ننتقل للمحاولة 2 */ }
+
+    /* المحاولة 2: المرور على المستخدمين */
+    if (!found) {
+      try {
+        const users = await db.collection('users').get();
+        for (const u of users.docs) {
+          const cars = await u.ref.collection('cars').get();
+          const hit = cars.docs.find(c => {
+            const x = c.data();
+            return norm(x.plate || x.carNumber) === key || (x.qrCode && norm(x.qrCode) === key);
+          });
+          if (hit) { found = { car: hit.data(), user: u.data() }; break; }
+        }
+      } catch (e) { console.error('خطأ في جلب بيانات السيارة:', e); }
+    }
+
+    carCache[key] = { t: Date.now(), v: found };
+    return found;
+  }
+
+  /* دمج: القيم الموجودة في live_status لها الأولوية، والناقص يُكمل من قاعدة البيانات */
+  function mergeData(live, db_) {
+    if (!db_) return live;
+    const c = db_.car || {}, u = db_.user || {};
+    const m = { ...live };
+    const fill = (key, aliases, val) => {
+      if (val === undefined || val === null || String(val).trim() === '') return;
+      if (!pick(m, aliases)) m[key] = val;
+    };
+    fill('owner_name', ['owner_name', 'ownerName', 'name', 'full_name', 'driver_name', 'customer_name'], pick(u, ['name', 'full_name']));
+    fill('phone', ['phone', 'phone_number', 'owner_phone', 'ownerPhone', 'mobile'], pick(u, ['phone']));
+    fill('fuel_type', ['fuel_type', 'fuelType', 'car_fuel_type', 'carFuelType', 'fuel'], pick(c, ['fuel', 'fuelType', 'fuel_type']));
+    fill('usage_type', ['usage_type', 'usageType', 'usage', 'car_usage', 'carUsage', 'use_type'], pick(c, ['usage', 'usageType', 'usage_type']));
+    fill('last_fill_date', ['last_fill_date', 'lastFillDate', 'last_fueling_date', 'lastFuelingDate', 'last_fill', 'last_fuel_date', 'lastFuelDate', 'last_refuel', 'lastRefuel'],
+         pick(c, ['lastFillDate', 'last_fill_date', 'lastFuelDate', 'lastFillAt', 'last_fill_at']) || pick(u, ['lastFillDate', 'last_fill_date']));
+    fill('next_fill_date', ['next_fill_date', 'nextFillDate', 'next_allowed_date', 'nextAllowedDate', 'next_fueling_date', 'next_date', 'nextDate'], pick(c, ['nextFillDate', 'next_fill_date']));
+    return m;
+  }
+
+  /* عرض البيانات والحالة */
+  function render(d) {
     const status = (d.verification_status || '').trim().toLowerCase();
     const plate  = d.car_plate || '';
-    
-    const carFuel = await fillDetails(d);
-    
-    const nextDate = fmtDate(pick(d, ['next_fill_date', 'next_allowed_date', 'next_fueling_date', 'next_date']));
+    const carFuel = fillDetails(d);
+    const nextDate = fmtDate(pick(d, ['next_fill_date', 'nextFillDate', 'next_allowed_date', 'nextAllowedDate', 'next_fueling_date', 'next_date', 'nextDate']));
     const hasNext  = nextDate !== '—';
 
     if (status === 'approved') {
@@ -439,15 +442,44 @@
       setNotes(bad ? 'لا يمكنك التعبئة: رمز الـ QR غير صالح أو ناقص البيانات.'
                    : 'لا يمكنك التعبئة: هذه السيارة غير نشطة بالمنظومة.');
     }
+  }
 
-    // تشغيل شريط الوقت (10 ثواني)
+  /* =====================================================
+     الاستماع الحي لحالة التعبئة الحالية
+  ===================================================== */
+  const RESET_MS = 10000;
+  let scanToken = 0;
+
+  db.collection('live_status').doc('current_scan').onSnapshot((snap) => {
+    if (resetTimeout) clearTimeout(resetTimeout);
+    if (!snap.exists) { scanToken++; showIdle(); return; }
+
+    const live = snap.data();
+    const token = ++scanToken;
+
+    /* 1) عرض فوري بما هو متوفر */
+    render(live);
+
+    /* 2) إكمال الناقص (الوقود، الاستعمال، الاسم...) من قاعدة البيانات */
+    const plate = live.car_plate || '';
+    const status = (live.verification_status || '').trim().toLowerCase();
+    if (plate && status !== 'invalid_qr' && !plate.includes('غير مستخدم')) {
+      lookupCar(plate).then((found) => {
+        if (token !== scanToken || !found) return;
+        render(mergeData(live, found));
+      });
+    }
+
+    /* 3) شريط العد التنازلي */
     timer.classList.remove('run'); void timer.offsetWidth; timer.classList.add('run');
 
-    // تصفير الشاشة بعد 10 ثواني إذا لم يتم مسح جديد
+    /* 4) العودة للانتظار بعد 10 ثوانٍ دون قراءة جديدة */
     resetTimeout = setTimeout(() => {
+      scanToken++;
+      showIdle();                                   /* تصفير محلي مضمون */
       db.collection('live_status').doc('current_scan').delete()
         .catch((err) => console.error('خطأ التصفير:', err));
-    }, 10000);
+    }, RESET_MS);
 
   }, (err) => console.error('خطأ في جلب البث المباشر:', err));
 
