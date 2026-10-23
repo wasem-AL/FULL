@@ -335,7 +335,8 @@
     setText('v-phone', phone);
     setText('v-usage', usage);
     const lastTxt = fmtDate(last);
-    setText('v-last', lastTxt === '—' ? '' : lastTxt);
+    if (lastTxt === '—' && d.__new_car) setText('v-last', 'سيارة جديدة — لا توجد تعبئة سابقة');
+    else setText('v-last', lastTxt === '—' ? '' : lastTxt);
 
     const p = $('v-plate');
     p.className = plate ? 'plate' : 'empty';
@@ -358,7 +359,7 @@
   async function lookupCar(plate) {
     const key = norm(plate);
     if (!key) return null;
-    if (carCache[key] && Date.now() - carCache[key].t < 60000) return carCache[key].v;
+    if (carCache[key] && Date.now() - carCache[key].t < 5000) return carCache[key].v;
 
     let found = null;
 
@@ -387,27 +388,61 @@
       } catch (e) { console.error('خطأ في جلب بيانات السيارة:', e); }
     }
 
+    if (found) {
+      const hasLast = pick(found.car, ['lastFillDate', 'last_fill_date', 'lastFuelDate', 'lastFillAt', 'last_fill_at']);
+      if (hasLast) { found.lastFill = hasLast; found.isNew = false; }
+      else {
+        const r = await lookupLastFill(found.car.plate || found.car.carNumber || plate);
+        found.lastFill = r.date; found.isNew = r.isNew;
+      }
+    }
+
     carCache[key] = { t: Date.now(), v: found };
     return found;
   }
 
-  /* دمج: القيم الموجودة في live_status لها الأولوية، والناقص يُكمل من قاعدة البيانات */
+  /* دمج: بيانات قاعدة البيانات (users/cars) لها الأولوية،
+     و live_status يُستخدم فقط كإشارة "تم مسح رمز" + قرار الحالة + رقم اللوحة */
   function mergeData(live, db_) {
     if (!db_) return live;
     const c = db_.car || {}, u = db_.user || {};
     const m = { ...live };
-    const fill = (key, aliases, val) => {
+    const set = (keys, val) => {
       if (val === undefined || val === null || String(val).trim() === '') return;
-      if (!pick(m, aliases)) m[key] = val;
+      keys.forEach(k => { delete m[k]; });       /* نحذف قيم live القديمة بكل أسمائها */
+      m[keys[0]] = val;
     };
-    fill('owner_name', ['owner_name', 'ownerName', 'name', 'full_name', 'driver_name', 'customer_name'], pick(u, ['name', 'full_name']));
-    fill('phone', ['phone', 'phone_number', 'owner_phone', 'ownerPhone', 'mobile'], pick(u, ['phone']));
-    fill('fuel_type', ['fuel_type', 'fuelType', 'car_fuel_type', 'carFuelType', 'fuel'], pick(c, ['fuel', 'fuelType', 'fuel_type']));
-    fill('usage_type', ['usage_type', 'usageType', 'usage', 'car_usage', 'carUsage', 'use_type'], pick(c, ['usage', 'usageType', 'usage_type']));
-    fill('last_fill_date', ['last_fill_date', 'lastFillDate', 'last_fueling_date', 'lastFuelingDate', 'last_fill', 'last_fuel_date', 'lastFuelDate', 'last_refuel', 'lastRefuel'],
-         pick(c, ['lastFillDate', 'last_fill_date', 'lastFuelDate', 'lastFillAt', 'last_fill_at']) || pick(u, ['lastFillDate', 'last_fill_date']));
-    fill('next_fill_date', ['next_fill_date', 'nextFillDate', 'next_allowed_date', 'nextAllowedDate', 'next_fueling_date', 'next_date', 'nextDate'], pick(c, ['nextFillDate', 'next_fill_date']));
+    set(['owner_name', 'ownerName', 'name', 'full_name', 'driver_name', 'customer_name'], pick(u, ['name', 'full_name']));
+    set(['phone', 'phone_number', 'owner_phone', 'ownerPhone', 'mobile'], pick(u, ['phone']));
+    set(['car_plate'], pick(c, ['plate', 'carNumber']) || live.car_plate);
+    set(['fuel_type', 'fuelType', 'car_fuel_type', 'carFuelType', 'fuel'], pick(c, ['fuel', 'fuelType', 'fuel_type']));
+    set(['usage_type', 'usageType', 'usage', 'car_usage', 'carUsage', 'use_type'], pick(c, ['usage', 'usageType', 'usage_type']));
+    set(['last_fill_date', 'lastFillDate', 'last_fueling_date', 'lastFuelingDate', 'last_fill', 'last_fuel_date', 'lastFuelDate', 'last_refuel', 'lastRefuel'],
+        pick(c, ['lastFillDate', 'last_fill_date', 'lastFuelDate', 'lastFillAt', 'last_fill_at']) || db_.lastFill);
+    set(['next_fill_date', 'nextFillDate', 'next_allowed_date', 'nextAllowedDate', 'next_fueling_date', 'next_date', 'nextDate'], pick(c, ['nextFillDate', 'next_fill_date']));
+    m.__new_car = !!db_.isNew;
     return m;
+  }
+
+  /* آخر تعبئة: مستند في scans معرّفه = رقم اللوحة، والتاريخ في الحقل timestamp
+     إن لم يوجد المستند فالسيارة جديدة */
+  async function lookupLastFill(plate) {
+    const id = String(plate || '').trim();
+    if (!id) return { date: '', isNew: false };
+    const candidates = [...new Set([id, id.toUpperCase(), id.replace(/\s+/g, '')])];
+    let queryOk = false;
+
+    for (const docId of candidates) {
+      try {
+        const snap = await db.collection('scans').doc(docId).get();
+        queryOk = true;
+        if (snap.exists) {
+          const ts = snap.data().timestamp;
+          return { date: ts || '', isNew: false };
+        }
+      } catch (e) { console.error('خطأ في قراءة scans:', e); }
+    }
+    return { date: '', isNew: queryOk };      /* لا مستند = سيارة جديدة */
   }
 
   /* عرض البيانات والحالة */
@@ -457,16 +492,16 @@
     const live = snap.data();
     const token = ++scanToken;
 
-    /* 1) عرض فوري بما هو متوفر */
-    render(live);
+    /* 1) عرض فوري للحالة + اللوحة فقط (بقية البيانات تأتي من قاعدة البيانات) */
+    render({ verification_status: live.verification_status, car_plate: live.car_plate, pump_fuel: live.pump_fuel, pump_fuel_type: live.pump_fuel_type, station_fuel: live.station_fuel });
 
     /* 2) إكمال الناقص (الوقود، الاستعمال، الاسم...) من قاعدة البيانات */
     const plate = live.car_plate || '';
     const status = (live.verification_status || '').trim().toLowerCase();
     if (plate && status !== 'invalid_qr' && !plate.includes('غير مستخدم')) {
       lookupCar(plate).then((found) => {
-        if (token !== scanToken || !found) return;
-        render(mergeData(live, found));
+        if (token !== scanToken) return;
+        render(found ? mergeData(live, found) : live);
       });
     }
 
